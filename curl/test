@@ -1,0 +1,7 @@
+curl -X POST http://localhost:3000/render \
+  -F "orientation=portrait" \
+  -F "audio=@audio.mp3" \
+  -F "images=@img1.png" \
+  -F "images=@img2.png" \
+  -F "images=@img3.png" \
+  --output video.mp4
