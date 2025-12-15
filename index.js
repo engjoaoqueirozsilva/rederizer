@@ -53,7 +53,7 @@ function getAudioDuration(audioPath) {
       (err, stdout) => {
         if (err) return reject(err);
         const duration = parseFloat(stdout.trim());
-        console.log(`📊 Duração do áudio ${audioPath}: ${duration}s`);
+        console.log(`📊 Duração do áudio: ${duration}s`);
         resolve(duration);
       }
     );
@@ -61,23 +61,21 @@ function getAudioDuration(audioPath) {
 }
 
 /**
- * Cria arquivo concat
+ * Cria arquivo concat com transição
  */
 function createConcatFile(images, duration, filePath) {
   let content = "";
-  const transitionDuration = 0.5; // 0.5 segundos de fade
-  const imageDuration = duration - transitionDuration;
-  
   images.forEach((img) => {
     const normalizedPath = img.replace(/\\/g, '/');
     content += `file '${normalizedPath}'\n`;
-    content += `duration ${imageDuration}\n`;
+    content += `duration ${duration}\n`;
   });
+  // Adiciona a última imagem novamente SEM duração (requisito do concat demuxer)
   const lastImage = images[images.length - 1].replace(/\\/g, '/');
   content += `file '${lastImage}'\n`;
   
   fs.writeFileSync(filePath, content);
-  console.log(`📝 Arquivo concat criado com ${images.length} imagens (fade ${transitionDuration}s)`);
+  console.log(`📝 Arquivo concat criado com ${images.length} imagens`);
 }
 
 // ========== ENDPOINTS ==========
@@ -94,8 +92,8 @@ app.post(
   "/render",
   authenticate, // Middleware de autenticação
   upload.fields([
-    { name: "narration", maxCount: 1 },
-    { name: "background", maxCount: 1 },
+    { name: "narration", maxCount: 1 },  // Áudio principal (narração)
+    { name: "background", maxCount: 1 }, // Trilha sonora
     { name: "images", maxCount: 20 }
   ]),
   async (req, res) => {
@@ -133,16 +131,24 @@ app.post(
 
       createConcatFile(imagePaths, durationPerImage, concatFile);
 
+      // Calcula valores para os filtros de vídeo (zoom + fade)
+      const zoomDuration = Math.round(25 * durationPerImage); // frames a 25fps
+      const fadeOutStart = (durationPerImage - 0.5).toFixed(2);
+
       const videoFilter =
         orientation === "portrait"
-          ? "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(zoom+0.0015,1.1)':d=25*${durationPerImage}:s=1080x1920,fade=t=in:st=0:d=0.5,fade=t=out:st=${durationPerImage-0.5}:d=0.5"
-          : "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,zoompan=z='min(zoom+0.0015,1.1)':d=25*${durationPerImage}:s=1920x1080,fade=t=in:st=0:d=0.5,fade=t=out:st=${durationPerImage-0.5}:d=0.5";
+          ? `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(zoom+0.0015,1.1)':d=${zoomDuration}:s=1080x1920,fade=t=in:st=0:d=0.5,fade=t=out:st=${fadeOutStart}:d=0.5`
+          : `scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,zoompan=z='min(zoom+0.0015,1.1)':d=${zoomDuration}:s=1920x1080,fade=t=in:st=0:d=0.5,fade=t=out:st=${fadeOutStart}:d=0.5`;
 
       let cmd;
 
       if (backgroundPath) {
-        cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}" -i "${narrationPath}" -stream_loop -1 -i "${backgroundPath}" -filter_complex "[1:a]volume=1.0[narration];[2:a]asetpts=N/SR/TB,volume=0.2[background];[narration][background]amix=inputs=2:duration=first:dropout_transition=2[audio]" -map 0:v:0 -map "[audio]" -vf "${videoFilter}" -c:v libx264 -preset fast -profile:v high -level 4.2 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${outputFile}"`;
+        // COM trilha sonora: mixa os 2 áudios com loop na trilha
+        // [1:a] = narração (volume 1.0 = 100%)
+        // [2:a] = background com loop (volume 0.8 = 80%)
+        cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}" -i "${narrationPath}" -stream_loop -1 -i "${backgroundPath}" -filter_complex "[1:a]volume=1.0[narration];[2:a]asetpts=N/SR/TB,volume=0.8[background];[narration][background]amix=inputs=2:duration=first:dropout_transition=2[audio]" -map 0:v:0 -map "[audio]" -vf "${videoFilter}" -c:v libx264 -preset fast -profile:v high -level 4.2 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${outputFile}"`;
       } else {
+        // SEM trilha sonora: apenas narração
         cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}" -i "${narrationPath}" -map 0:v:0 -map 1:a:0 -vf "${videoFilter}" -c:v libx264 -preset fast -profile:v high -level 4.2 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${outputFile}"`;
       }
 
