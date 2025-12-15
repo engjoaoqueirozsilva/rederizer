@@ -1,0 +1,2 @@
+# rederizer
+FFMpeg com renderização
