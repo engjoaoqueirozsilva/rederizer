@@ -49,9 +49,7 @@ app.post(
       const orientation = req.body.orientation || "landscape";
 
       if (!req.files?.audio || !req.files?.images) {
-        return res.status(400).json({
-          error: "audio and images are required"
-        });
+        return res.status(400).json({ error: "audio and images are required" });
       }
 
       const audioPath = req.files.audio[0].path;
@@ -78,16 +76,19 @@ app.post(
         -map 1:a:0 \
         -vf "${videoFilter}" \
         -c:v libx264 \
+        -preset fast \
+        -profile:v high \
+        -level 4.2 \
+        -pix_fmt yuv420p \
         -c:a aac \
         -b:a 192k \
-        -pix_fmt yuv420p \
         -shortest \
         "${outputFile}"
       `;
 
-      exec(cmd, err => {
+      exec(cmd, (err, stdout, stderr) => {
         if (err) {
-          console.error("FFmpeg error:", err);
+          console.error("FFmpeg error:", stderr);
           return res.status(500).json({ error: "ffmpeg failed" });
         }
 
@@ -97,28 +98,22 @@ app.post(
           `attachment; filename="video.mp4"`
         );
 
-        const stream = fs.createReadStream(outputFile);
-
-        stream.on("close", () => {
-          // cleanup seguro
-          try {
+        fs.createReadStream(outputFile)
+          .on("close", () => {
             fs.unlinkSync(outputFile);
             fs.unlinkSync(concatFile);
             fs.unlinkSync(audioPath);
             imagePaths.forEach(p => fs.unlinkSync(p));
-          } catch (e) {
-            console.warn("Cleanup warning:", e.message);
-          }
-        });
-
-        stream.pipe(res);
+          })
+          .pipe(res);
       });
     } catch (err) {
-      console.error("Render error:", err);
+      console.error(err);
       res.status(500).json({ error: err.message });
     }
   }
 );
+
 
 
 app.get("/health", (_, res) => res.json({ status: "ok" }));
