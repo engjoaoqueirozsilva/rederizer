@@ -48,8 +48,10 @@ app.post(
     try {
       const orientation = req.body.orientation || "landscape";
 
-      if (!req.files.audio || !req.files.images) {
-        return res.status(400).json({ error: "audio and images are required" });
+      if (!req.files?.audio || !req.files?.images) {
+        return res.status(400).json({
+          error: "audio and images are required"
+        });
       }
 
       const audioPath = req.files.audio[0].path;
@@ -72,8 +74,12 @@ app.post(
         ffmpeg -y \
         -f concat -safe 0 -i "${concatFile}" \
         -i "${audioPath}" \
+        -map 0:v:0 \
+        -map 1:a:0 \
         -vf "${videoFilter}" \
         -c:v libx264 \
+        -c:a aac \
+        -b:a 192k \
         -pix_fmt yuv420p \
         -shortest \
         "${outputFile}"
@@ -81,7 +87,7 @@ app.post(
 
       exec(cmd, err => {
         if (err) {
-          console.error(err);
+          console.error("FFmpeg error:", err);
           return res.status(500).json({ error: "ffmpeg failed" });
         }
 
@@ -91,22 +97,29 @@ app.post(
           `attachment; filename="video.mp4"`
         );
 
-        fs.createReadStream(outputFile)
-          .on("close", () => {
-            // cleanup
+        const stream = fs.createReadStream(outputFile);
+
+        stream.on("close", () => {
+          // cleanup seguro
+          try {
             fs.unlinkSync(outputFile);
             fs.unlinkSync(concatFile);
             fs.unlinkSync(audioPath);
             imagePaths.forEach(p => fs.unlinkSync(p));
-          })
-          .pipe(res);
+          } catch (e) {
+            console.warn("Cleanup warning:", e.message);
+          }
+        });
+
+        stream.pipe(res);
       });
     } catch (err) {
-      console.error(err);
+      console.error("Render error:", err);
       res.status(500).json({ error: err.message });
     }
   }
 );
+
 
 app.get("/health", (_, res) => res.json({ status: "ok" }));
 
