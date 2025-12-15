@@ -65,17 +65,19 @@ function getAudioDuration(audioPath) {
  */
 function createConcatFile(images, duration, filePath) {
   let content = "";
+  const transitionDuration = 0.5; // 0.5 segundos de fade
+  const imageDuration = duration - transitionDuration;
+  
   images.forEach((img) => {
     const normalizedPath = img.replace(/\\/g, '/');
     content += `file '${normalizedPath}'\n`;
-    content += `duration ${duration}\n`;
+    content += `duration ${imageDuration}\n`;
   });
-  // Adiciona a última imagem novamente SEM duração
   const lastImage = images[images.length - 1].replace(/\\/g, '/');
   content += `file '${lastImage}'\n`;
   
   fs.writeFileSync(filePath, content);
-  console.log(`📝 Arquivo concat criado com ${images.length} imagens`);
+  console.log(`📝 Arquivo concat criado com ${images.length} imagens (fade ${transitionDuration}s)`);
 }
 
 // ========== ENDPOINTS ==========
@@ -133,13 +135,13 @@ app.post(
 
       const videoFilter =
         orientation === "portrait"
-          ? "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
-          : "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080";
+          ? "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(zoom+0.0015,1.1)':d=25*${durationPerImage}:s=1080x1920,fade=t=in:st=0:d=0.5,fade=t=out:st=${durationPerImage-0.5}:d=0.5"
+          : "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,zoompan=z='min(zoom+0.0015,1.1)':d=25*${durationPerImage}:s=1920x1080,fade=t=in:st=0:d=0.5,fade=t=out:st=${durationPerImage-0.5}:d=0.5";
 
       let cmd;
 
       if (backgroundPath) {
-        cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}" -i "${narrationPath}" -stream_loop -1 -i "${backgroundPath}" -filter_complex "[1:a]volume=1.0[narration];[2:a]asetpts=N/SR/TB,volume=0.8[background];[narration][background]amix=inputs=2:duration=first:dropout_transition=2[audio]" -map 0:v:0 -map "[audio]" -vf "${videoFilter}" -c:v libx264 -preset fast -profile:v high -level 4.2 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${outputFile}"`;
+        cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}" -i "${narrationPath}" -stream_loop -1 -i "${backgroundPath}" -filter_complex "[1:a]volume=1.0[narration];[2:a]asetpts=N/SR/TB,volume=0.2[background];[narration][background]amix=inputs=2:duration=first:dropout_transition=2[audio]" -map 0:v:0 -map "[audio]" -vf "${videoFilter}" -c:v libx264 -preset fast -profile:v high -level 4.2 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${outputFile}"`;
       } else {
         cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}" -i "${narrationPath}" -map 0:v:0 -map 1:a:0 -vf "${videoFilter}" -c:v libx264 -preset fast -profile:v high -level 4.2 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${outputFile}"`;
       }
