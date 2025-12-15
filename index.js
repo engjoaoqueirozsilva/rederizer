@@ -65,17 +65,22 @@ function getAudioDuration(audioPath) {
  */
 function createConcatFile(images, duration, filePath) {
   let content = "";
-  images.forEach((img) => {
+  
+  // Garante duração mínima de 1 segundo por imagem
+  const safeDuration = Math.max(duration, 1.0);
+  
+  images.forEach((img, index) => {
     const normalizedPath = img.replace(/\\/g, '/');
     content += `file '${normalizedPath}'\n`;
-    content += `duration ${duration}\n`;
+    content += `duration ${safeDuration.toFixed(3)}\n`;
   });
-  // Adiciona a última imagem novamente SEM duração (requisito do concat demuxer)
+  
+  // IMPORTANTE: Adiciona a última imagem novamente SEM duração
   const lastImage = images[images.length - 1].replace(/\\/g, '/');
   content += `file '${lastImage}'\n`;
   
   fs.writeFileSync(filePath, content);
-  console.log(`📝 Arquivo concat criado com ${images.length} imagens`);
+  console.log(`📝 Arquivo concat:\n${content}`);
 }
 
 // ========== ENDPOINTS ==========
@@ -134,11 +139,20 @@ app.post(
       // Calcula valores para os filtros de vídeo (zoom + fade)
       const zoomDuration = Math.round(40 * durationPerImage); // frames a 25fps
       const fadeOutStart = (durationPerImage - 0.5).toFixed(2);
-
+      
+      const videoFilter =
+        orientation === "portrait"
+          ? `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920`
+          : `scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080`;
+      
+      
+      
+      /*
       const videoFilter =
         orientation === "portrait"
           ? `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(zoom+0.0015,1.1)':d=${zoomDuration}:s=1080x1920,fade=t=in:st=0:d=0.5,fade=t=out:st=${fadeOutStart}:d=0.5`
           : `scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,zoompan=z='min(zoom+0.0015,1.1)':d=${zoomDuration}:s=1920x1080,fade=t=in:st=0:d=0.5,fade=t=out:st=${fadeOutStart}:d=0.5`;
+      */
 
       let cmd;
 
