@@ -132,7 +132,7 @@ app.post(
       createConcatFile(imagePaths, durationPerImage, concatFile);
 
       // Calcula valores para os filtros de vídeo (zoom + fade)
-      const zoomDuration = Math.round(25 * durationPerImage); // frames a 25fps
+      const zoomDuration = Math.round(40 * durationPerImage); // frames a 25fps
       const fadeOutStart = (durationPerImage - 0.5).toFixed(2);
 
       const videoFilter =
@@ -146,7 +146,7 @@ app.post(
         // COM trilha sonora: mixa os 2 áudios com loop na trilha
         // [1:a] = narração (volume 1.0 = 100%)
         // [2:a] = background com loop (volume 0.8 = 80%)
-        cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}" -i "${narrationPath}" -stream_loop -1 -i "${backgroundPath}" -filter_complex "[1:a]volume=1.0[narration];[2:a]asetpts=N/SR/TB,volume=0.8[background];[narration][background]amix=inputs=2:duration=first:dropout_transition=2[audio]" -map 0:v:0 -map "[audio]" -vf "${videoFilter}" -c:v libx264 -preset fast -profile:v high -level 4.2 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${outputFile}"`;
+        cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}" -i "${narrationPath}" -stream_loop -1 -i "${backgroundPath}" -filter_complex "[1:a]volume=1.0[narration];[2:a]asetpts=N/SR/TB,volume=0.3[background];[narration][background]amix=inputs=2:duration=first:dropout_transition=2[audio]" -map 0:v:0 -map "[audio]" -vf "${videoFilter}" -c:v libx264 -preset fast -profile:v high -level 4.2 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${outputFile}"`;
       } else {
         // SEM trilha sonora: apenas narração
         cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}" -i "${narrationPath}" -map 0:v:0 -map 1:a:0 -vf "${videoFilter}" -c:v libx264 -preset fast -profile:v high -level 4.2 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${outputFile}"`;
