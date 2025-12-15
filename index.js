@@ -4,9 +4,44 @@ import { exec } from "child_process";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import crypto from "crypto";
 
 const app = express();
 const upload = multer({ dest: os.tmpdir() });
+
+// ========== CONFIGURAÇÃO DE SEGURANÇA ==========
+const API_SECRET = process.env.API_SECRET || "admin";
+
+/**
+ * Middleware de autenticação
+ */
+function authenticate(req, res, next) {
+  const authHeader = req.headers['x-api-key'];
+  
+  if (!authHeader) {
+    return res.status(401).json({ 
+      error: "Unauthorized", 
+      message: "x-api-key header is required" 
+    });
+  }
+
+  // Gera hash da secret para comparação
+  const validHash = crypto
+    .createHash('sha256')
+    .update(API_SECRET)
+    .digest('hex');
+
+  if (authHeader !== validHash) {
+    return res.status(403).json({ 
+      error: "Forbidden", 
+      message: "Invalid API key" 
+    });
+  }
+
+  next();
+}
+
+// ========== FUNÇÕES AUXILIARES ==========
 
 /**
  * ffprobe → duração do áudio
@@ -18,7 +53,7 @@ function getAudioDuration(audioPath) {
       (err, stdout) => {
         if (err) return reject(err);
         const duration = parseFloat(stdout.trim());
-        console.log(`📊 Duração do áudio: ${duration}s`);
+        console.log(`📊 Duração do áudio ${audioPath}: ${duration}s`);
         resolve(duration);
       }
     );
@@ -27,51 +62,69 @@ function getAudioDuration(audioPath) {
 
 /**
  * Cria arquivo concat
- * IMPORTANTE: precisa repetir a última imagem SEM duração
  */
 function createConcatFile(images, duration, filePath) {
   let content = "";
-  images.forEach((img, index) => {
-    // Normaliza o caminho para o formato correto
+  images.forEach((img) => {
     const normalizedPath = img.replace(/\\/g, '/');
     content += `file '${normalizedPath}'\n`;
     content += `duration ${duration}\n`;
   });
-  // Adiciona a última imagem novamente SEM duração (requisito do concat demuxer)
+  // Adiciona a última imagem novamente SEM duração
   const lastImage = images[images.length - 1].replace(/\\/g, '/');
   content += `file '${lastImage}'\n`;
   
   fs.writeFileSync(filePath, content);
-  console.log(`📝 Arquivo concat criado:\n${content}`);
+  console.log(`📝 Arquivo concat criado com ${images.length} imagens`);
 }
 
+// ========== ENDPOINTS ==========
+
 /**
- * Endpoint final
+ * Endpoint de health check (sem autenticação)
+ */
+app.get("/health", (_, res) => res.json({ status: "ok" }));
+
+/**
+ * Endpoint principal de renderização (COM autenticação)
  */
 app.post(
   "/render",
+  authenticate, // Middleware de autenticação
   upload.fields([
-    { name: "audio", maxCount: 1 },
+    { name: "narration", maxCount: 1 },
+    { name: "background", maxCount: 1 },
     { name: "images", maxCount: 20 }
   ]),
   async (req, res) => {
     try {
       const orientation = req.body.orientation || "landscape";
 
-      if (!req.files?.audio || !req.files?.images) {
-        return res.status(400).json({ error: "audio and images are required" });
+      if (!req.files?.narration || !req.files?.images) {
+        return res.status(400).json({ 
+          error: "narration and images are required" 
+        });
       }
 
-      const audioPath = req.files.audio[0].path;
+      const narrationPath = req.files.narration[0].path;
+      const backgroundPath = req.files.background?.[0]?.path;
       const imagePaths = req.files.images.map(f => f.path);
 
-      console.log(`🎵 Áudio: ${audioPath}`);
+      console.log(`🎤 Narração: ${narrationPath}`);
+      console.log(`🎵 Trilha: ${backgroundPath || 'Nenhuma'}`);
       console.log(`🖼️  Imagens: ${imagePaths.length} arquivos`);
 
-      const audioDuration = await getAudioDuration(audioPath);
-      const durationPerImage = audioDuration / imagePaths.length;
+      const narrationDuration = await getAudioDuration(narrationPath);
+      const durationPerImage = narrationDuration / imagePaths.length;
 
+      console.log(`⏱️  Duração total (narração): ${narrationDuration}s`);
       console.log(`⏱️  Duração por imagem: ${durationPerImage}s`);
+
+      if (backgroundPath) {
+        const backgroundDuration = await getAudioDuration(backgroundPath);
+        const loops = Math.ceil(narrationDuration / backgroundDuration);
+        console.log(`🔁 Trilha será repetida ~${loops}x para cobrir ${narrationDuration}s`);
+      }
 
       const concatFile = path.join(os.tmpdir(), `images-${Date.now()}.txt`);
       const outputFile = path.join(os.tmpdir(), `video-${Date.now()}.mp4`);
@@ -83,19 +136,27 @@ app.post(
           ? "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
           : "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080";
 
-      // Comando FFmpeg otimizado
-      const cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}" -i "${audioPath}" -map 0:v:0 -map 1:a:0 -vf "${videoFilter}" -c:v libx264 -preset fast -profile:v high -level 4.2 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${outputFile}"`;
+      let cmd;
+
+      if (backgroundPath) {
+        cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}" -i "${narrationPath}" -stream_loop -1 -i "${backgroundPath}" -filter_complex "[1:a]volume=1.0[narration];[2:a]asetpts=N/SR/TB,volume=0.8[background];[narration][background]amix=inputs=2:duration=first:dropout_transition=2[audio]" -map 0:v:0 -map "[audio]" -vf "${videoFilter}" -c:v libx264 -preset fast -profile:v high -level 4.2 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${outputFile}"`;
+      } else {
+        cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}" -i "${narrationPath}" -map 0:v:0 -map 1:a:0 -vf "${videoFilter}" -c:v libx264 -preset fast -profile:v high -level 4.2 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${outputFile}"`;
+      }
 
       console.log(`🎬 Executando FFmpeg...`);
 
       exec(cmd, (err, stdout, stderr) => {
         if (err) {
           console.error("❌ FFmpeg error:", stderr);
-          return res.status(500).json({ error: "ffmpeg failed", details: stderr });
+          return res.status(500).json({ 
+            error: "ffmpeg failed", 
+            details: stderr 
+          });
         }
 
         console.log("✅ Vídeo gerado com sucesso!");
-        console.log("FFmpeg output:", stderr); // FFmpeg usa stderr para logs
+        console.log("FFmpeg output:", stderr);
 
         res.setHeader("Content-Type", "video/mp4");
         res.setHeader(
@@ -115,7 +176,8 @@ app.post(
           try {
             fs.unlinkSync(outputFile);
             fs.unlinkSync(concatFile);
-            fs.unlinkSync(audioPath);
+            fs.unlinkSync(narrationPath);
+            if (backgroundPath) fs.unlinkSync(backgroundPath);
             imagePaths.forEach(p => fs.unlinkSync(p));
           } catch (cleanupErr) {
             console.error("⚠️  Erro ao limpar arquivos:", cleanupErr);
@@ -131,10 +193,18 @@ app.post(
   }
 );
 
-app.get("/health", (_, res) => res.json({ status: "ok" }));
+// ========== INICIALIZAÇÃO ==========
 
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🎬 FFmpeg render worker running on port ${PORT}`);
+  console.log(`🔒 API Secret: ${API_SECRET}`);
+  
+  // Gera e mostra o hash válido
+  const validHash = crypto
+    .createHash('sha256')
+    .update(API_SECRET)
+    .digest('hex');
+  console.log(`🔑 Valid API Key (SHA256): ${validHash}`);
 });
